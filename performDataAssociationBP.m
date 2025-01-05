@@ -25,9 +25,11 @@ for iteration = 1:numIterations
     product1 = messages2 .* inputLegacy(2:end,:);
     % demoninator of equation 30
     sum1 = inputLegacy(1,:) + sum(product1,1);
-
+    % the equation 30
     messages1 = inputLegacy(2:end,:) ./ (sum1(om,:) - product1);
+    % denominator of equation 31
     sum2 = inputNew + sum(messages1,2);
+    % d
     messages2 = 1 ./ (sum2(:,on) - messages1);
   
     if(mod(iteration,checkConvergence) == 0)
