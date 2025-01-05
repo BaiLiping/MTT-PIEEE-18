@@ -38,7 +38,7 @@ parameters.targetStartStates = getStartStates( 5, 1000, 10 );
 parameters.targetAppearanceFromTo = [[5;155],[10;160],[15;165],[20;170],[25;175]];
 [~, numTargets] = size(parameters.targetStartStates);
 trueTracks = generateTrueTracks(parameters, numSteps);
-parameters.sensorPositions = getSensorPositions( parameters.numSensors, 5000);
+parameters.sensorPositions = getSensorPositions( parameters.numSensors, 1000);
 
 
 % initialize all variables
@@ -66,9 +66,7 @@ unknownParticles(2,:) = (parameters.surveillanceRegion(2,2)-parameters.surveilla
 % perform BP-based tracking for all time steps
 for step = 1:numSteps
     step
-
     measurements(step,:) = generateClutteredMeasurements(generateTrueMeasurements(trueTracks(:,:,step),parameters),parameters);
-
     [estimates{step},estimatedCardinality(step),posteriorBeliefs,posteriorExistences,posteriorLabels] = trackerBP( measurements(step,:), posteriorBeliefs, posteriorExistences, posteriorLabels, unknownNumber, unknownParticles, step, parameters );
 
 end
@@ -76,5 +74,5 @@ estimatedTracks = trackFormation(estimates, parameters);
 
 
 % show results
-visualizationMode = 1;  %hit ``space'' to start visualization; set visualizationMode=0 for final result and visualizationMode=2 to frame-to-frame by hitting ``space''.
+visualizationMode = 2;  %hit ``space'' to start visualization; set visualizationMode=0 for final result and visualizationMode=2 to frame-to-frame by hitting ``space''.
 showResults(trueTracks, estimatedTracks, parameters.sensorPositions, measurements, estimatedCardinality, visualizationMode);

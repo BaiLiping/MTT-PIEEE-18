@@ -19,10 +19,13 @@ end
 newPTs = zeros(4,numParticles,numMeasurements);
 newLabels = zeros(3,numMeasurements);
 xiMessages = zeros(numMeasurements,1);
+% should be xiMessages = ones(numMeasurements, numPTs+1)
 for measurement = 1:numMeasurements
     newPTs(:,:,measurement) = sampleFromLikelihood(newMeasurements(:,measurement), sensor, numParticles, parameters);
     newLabels(:,measurement) = [step;sensor;measurement];
     xiMessages(measurement) = 1 + (constants(measurement) * unknownIntensity * detectionProbability)/clutterIntensity;
+    % should be 
+    % xiMessages(measurement, 1) = 1 + (constants(measurement) * unknownIntensity * detectionProbability)/clutterIntensity;
 end
 
 newExistences = xiMessages - 1;
