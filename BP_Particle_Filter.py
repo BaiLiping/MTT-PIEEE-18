@@ -12,16 +12,11 @@ class BP_Particle_Filter:
     this is mostly from debugging purposes and to make it easier to follow the code.
     """
     
-    def __init__(self, parameters: Dict):
+    def __init__(self, parameters: Dict, measurements):
         """
-        Initialize the MTT system with given parameters.
-        
-        Args:
-            parameters: Dictionary containing:
-                - mu_n: mean number of newly detected targets (μ_n^(s))
-                - mu_c: mean number of clutter measurements (μ_c^(s))
-                - p_d: detection probability (p_d^(s))
-                - p_s: survival probability (p_s)
+        Initialize the MTT system with given parameters. 
+        Measurements are used initiate messages
+        instead of performing the first prediction step.
         """
         self.mu_n = parameters['mu_n']
         self.mu_c = parameters['mu_c']
@@ -49,12 +44,16 @@ class BP_Particle_Filter:
         self.unknown_number = parameters['unknownNumber']
         self.unknown_particles = np.zeros((2, parameters['numParticles']))
         # Initialize arrays for new PTs and messages
+        num_measurements = measurements.shape[1]
         self.new_pts = np.zeros((4, self.num_particles, num_measurements))
         self.new_labels = np.zeros((3, num_measurements))
         self.xi_k = np.zeros(num_measurements)
         # Initiate the messages for the Loopy BP
-        self.v_k_current = np.ones((num_measurements, num_objects))  # v_k^[l](m→i)
-
+        num_objects = 1
+        # Initialize output matrices with ones
+        self.phi_k = np.ones((num_measurements, num_objects))
+        self.v_k = np.ones(num_measurements)
+    
         # Loop through x and y coordinates (i=0 for x, i=1 for y)
         for i in range(2):
             # Generate uniform random distribution of particles within surveillance region:
@@ -167,7 +166,7 @@ class BP_Particle_Filter:
         self.new_pts = np.zeros((4, self.num_particles, num_measurements))
         self.new_labels = np.zeros((3, num_measurements))
         self.xi_k = np.zeros(num_measurements)
-    
+
         # Process each measurement to create new PTs
         # This corresponds to creating new nodes a^m and b^m in the factor graph
         for measurement in range(num_measurements):
@@ -345,7 +344,7 @@ class BP_Particle_Filter:
                         (1 - existence) * v_factors0)
         
 
-    def perform_data_association_bp(self, beta_k):
+    def perform_data_association_bp(self):
         """
         Implements the scalable Sum-Product Algorithm (SPA) based Data Association (DA) algorithm.
         
@@ -378,12 +377,12 @@ class BP_Particle_Filter:
         """
         
         # Get dimensions from input
-        num_measurements = beta_k.shape[0] - 1  # Subtract 1 for β_k^(i)(0) row
-        num_objects = beta_k.shape[1]
+        num_measurements = self.beta_k.shape[0] - 1  # Subtract 1 for β_k^(i)(0) row
+        num_objects = self.beta_k.shape[1]
         
         # Initialize output matrices with ones
-        phi_k = np.ones((num_measurements, num_objects))
-        v_k = np.ones(num_measurements)
+        self.phi_k = np.ones((num_measurements, num_objects))
+        self.v_k = np.ones(num_measurements)
         
         # Early return if either dimension is 0
         if num_objects == 0 or num_measurements == 0:
@@ -411,7 +410,7 @@ class BP_Particle_Filter:
             # Compute v_k^[l](m→i) following equation (31)
             # Calculate denominator: ξ_k^(m)(0) + Σ_{i'≠i} ξ_k^(m)(i') * φ_k^[l-1](i'→m)
             # axis=1 means you're operating along the second dimension (columns), resulting in one value per row
-            xi_sum = xi_k + np.sum(phi_k_current, axis=1)
+            xi_sum = self.xi_k + np.sum(phi_k_current, axis=1)
             
             # Update v_k_current (v_k^[l](m→i))
             v_k_current = 1.0 / (xi_sum[:, np.newaxis] - phi_k_current)
@@ -421,11 +420,9 @@ class BP_Particle_Filter:
             if distance < self.threshold:
                 break
         
-        phi_k = v_k_current
-        return phi_k, v_k
+        self.phi_k = v_k_current
     
      
-            
     def state_transition(self, y_k_prev: np.ndarray, r_k_prev: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Implements the state transition model from equations (53)-(55).
@@ -463,8 +460,6 @@ class BP_Particle_Filter:
                     y_k[j] = self._sample_dummy_pdf()
                     
         return y_k, r_k
-    
-
     
     def _calculate_association_probs(self, z_k_s: np.ndarray, y_legacy: np.ndarray, 
                                   r_legacy: np.ndarray, m_k_s: int, j_k_s: int) -> np.ndarray:
