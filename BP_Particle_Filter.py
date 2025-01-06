@@ -7,6 +7,9 @@ class BP_Particle_Filter:
     """
     Implements the vector-type system model for MTT with unknown, time-varying number of targets
     as described in Section VIII of Meyer et al.
+
+    Notice this implementation has all the functions in one place,
+    this is mostly from debugging purposes and to make it easier to follow the code.
     """
     
     def __init__(self, parameters: Dict):
@@ -45,6 +48,13 @@ class BP_Particle_Filter:
         # Initialize Poisson point process
         self.unknown_number = parameters['unknownNumber']
         self.unknown_particles = np.zeros((2, parameters['numParticles']))
+        # Initialize arrays for new PTs and messages
+        self.new_pts = np.zeros((4, self.num_particles, num_measurements))
+        self.new_labels = np.zeros((3, num_measurements))
+        self.xi_k = np.zeros(num_measurements)
+        # Initiate the messages for the Loopy BP
+        self.v_k_current = np.ones((num_measurements, num_objects))  # v_k^[l](m→i)
+
         # Loop through x and y coordinates (i=0 for x, i=1 for y)
         for i in range(2):
             # Generate uniform random distribution of particles within surveillance region:
@@ -67,7 +77,50 @@ class BP_Particle_Filter:
             # Existence prediction
             self.existence_prob[target] = self.survival_probability * self.existence_prob[target]
 
-    def introduce_new_pts(new_measurements, sensor, step, unknown_number, unknown_particles, parameters):
+    def compute_alpha_messages(self):
+        """
+        Compute alpha messages using Sequential Importance Resampling (SIR) particle filter
+        """
+        num_targets = prev_states.shape[2]
+        state_dim = prev_states.shape[0]
+        
+        # Initialize output arrays
+        alpha_states = np.zeros((state_dim, self.params.num_particles, num_targets))
+        alpha_weights = np.zeros((self.params.num_particles, num_targets))
+        alpha_existence = np.zeros(num_targets)
+
+        # Process existing targets
+        for i in range(prev_states.shape[2]):
+            if prev_existence[i] > 0:
+                # Predict existence probability using survival probability
+                # p(rk(i)=1 | rk-1(i)=1) = ps(xk-1(i)) from eq (55)
+                alpha_existence[i] = prev_existence[i] * self.params.survival_prob
+
+                # Predict particles through state transition model
+                # This implements f(xk(i)|xk-1(i)) from eq (25)
+                for p in range(self.params.num_particles):
+                    # Sample process noise
+                    noise = np.random.multivariate_normal(
+                        np.zeros(state_dim), 
+                        self.Q
+                    )
+                    
+                    # State prediction
+                    alpha_states[:,p,i] = (
+                        self.F @ prev_states[:,p,i] + noise
+                    )
+                    
+                    # Weights remain unchanged in prediction step
+                    alpha_weights[p,i] = prev_weights[p,i]
+
+                # Check if resampling is needed
+                if self._need_resampling(alpha_weights[:,i]):
+                    alpha_states[:,:,i], alpha_weights[:,i] = self._resample(
+                        alpha_states[:,:,i],
+                        alpha_weights[:,i]
+                    )
+
+    def introduce_new_pts(self, measurements):
         """
         Introduces new potential targets (PTs) based on measurements.
         This implements part of the factor graph shown in Fig. 4, specifically handling the 
@@ -96,48 +149,41 @@ class BP_Particle_Filter:
             - new_existences: Existence probabilities for new targets
             - xi_messages: ξ messages (corresponds to ξ_m in the factor graph)
         """
-        num_particles = parameters['num_particles']
-        detection_probability = parameters['detection_probability']
-        clutter_intensity = parameters['mean_clutter'] * parameters['clutter_distribution']
-        sensor_positions = parameters['sensor_positions'][:, sensor-1]  # -1 for 0-based indexing
-        num_measurements = new_measurements.shape[1]
+        num_measurements = measurements.shape[1]
     
         # Compute unknown intensity (corresponds to intensity of undetected targets)
         # This affects the messages passed through factors q^m in the factor graph
         surveillance_area = ((parameters['surveillance_region'][0, 0] - parameters['surveillance_region'][1, 0]) * 
                             (parameters['surveillance_region'][0, 1] - parameters['surveillance_region'][1, 1]))
         unknown_intensity = unknown_number / surveillance_area
-        unknown_intensity *= (1 - detection_probability) ** (sensor - 1)
+        # This part need more comments
+        unknown_intensity *= (1 - self.p_d) ** (self.sensor - 1)
     
         # Calculate constants if there are measurements
         if num_measurements:
-            constants = calculate_constants_uniform(sensor_positions, new_measurements, 
-                                                 unknown_particles, parameters)
+            constants = self.calculate_constants_uniform()
     
         # Initialize arrays for new PTs and messages
-        new_pts = np.zeros((4, num_particles, num_measurements))
-        new_labels = np.zeros((3, num_measurements))
-        xi_messages = np.zeros(num_measurements)
+        self.new_pts = np.zeros((4, self.num_particles, num_measurements))
+        self.new_labels = np.zeros((3, num_measurements))
+        self.xi_k = np.zeros(num_measurements)
     
         # Process each measurement to create new PTs
         # This corresponds to creating new nodes a^m and b^m in the factor graph
         for measurement in range(num_measurements):
             # Sample new particles based on measurement likelihood
-            new_pts[:, :, measurement] = sample_from_likelihood(
-                new_measurements[:, measurement], sensor, num_particles, parameters)
+            self.new_pts[:, :, measurement] = self.sample_from_likelihood(measurements[:, measurement])
             
             # Assign labels [step; sensor; measurement]
-            new_labels[:, measurement] = [step, sensor, measurement]
+            self.new_labels[:, measurement] = [self.step, self.sensor, measurement]
             
             # Compute xi messages (ξ_m in the factor graph)
             # These messages flow from measurement factors to existence variables
-            xi_messages[measurement] = 1 + (constants[measurement] * unknown_intensity * 
-                                          detection_probability) / clutter_intensity
+            self.xi_k[measurement] = 1 + (constants[measurement] * unknown_intensity * 
+                                          self.p_d) / self.c
     
         # Compute existence probabilities for new targets
-        new_existences = xi_messages - 1
-    
-        return new_pts, new_labels, new_existences, xi_messages
+        self.new_existences = self.xi_k - 1
     
     def calculate_constants_uniform(sensor_position, new_measurements, particles, parameters):
         """
@@ -229,8 +275,77 @@ class BP_Particle_Filter:
         samples[2:4] = sqrtm(prior_vel_covariance) @ velocity_samples
     
         return samples
+    
+    def evaluate_measurements(self, measurements, sensor_position):
+        """
+        Evaluate measurement likelihood messages according to equations (63)-(66)
+        from the paper.
+        
+        Returns:
+            beta_messages: Messages from measurement nodes to target nodes (eq. 64)
+            v_factors1: Measurement evaluation factors for existing targets (eq. 66)
+        """
+        num_measurements = measurements.shape[1]
+        num_targets = self.numTargets
+        
+        # Initialize messages and factors
+        # beta_messages shape: (num_measurements+1 x num_targets)
+        # Extra row for non-detection case
+        self.beta_k = np.zeros((num_measurements + 1, num_targets))
+        
+        # v_factors1 shape: (num_measurements+1 x num_targets x num_particles)
+        # Stores likelihood factors for each particle
+        self.v_factors1 = np.zeros((num_measurements + 1, num_targets, self.num_particles))
+        
+        if num_targets == 0:
+            #NEED TO BE CHANGED
+            pass
+            
+        # Calculate non-detection likelihood (v_factors1[0,:,:])
+        # This corresponds to eq. 66 for r̅_k,s^(m) = 0
+        self.v_factors1[0,:,:] = 1 - self.p_d
+        
+        # Calculate constant factor according to measurement model
+        # This implements part of eq. 63-64 for the measurement likelihood
+        constant_factor = (1 / (2 * np.pi * np.sqrt(self.meas_var_bearing * 
+                          self.meas_var_range)) * self.p_d / 
+                          (self.mean_clutter * self.clutter_distribution))
+        
+        
+        # For each target, calculate measurement likelihoods
+        for target in range(num_targets):
+            # Calculate predicted range and bearing for all particles
+            dx = self.alphas[0,:,target] - sensor_position[0]
+            dy = self.alphas[1,:,target] - sensor_position[1]
+            predicted_range = np.sqrt(dx**2 + dy**2)
+            predicted_bearing = np.degrees(np.arctan2(dx, dy))
+            
+            # For each measurement, calculate likelihood for all particles
+            # This implements eq. 65-66 for the measurement likelihood factors
+            for m in range(num_measurements):
+                # Range likelihood
+                range_likelihood = np.exp(-0.5/self.meas_var_range * 
+                                  (measurements[0,m] - predicted_range)**2)
+                
+                # Bearing likelihood with wrapping to [-180,180]
+                bearing_diff = measurements[1,m] - predicted_bearing
+                bearing_diff = ((bearing_diff + 180) % 360) - 180  # wrap to [-180,180]
+                bearing_likelihood = np.exp(-0.5/self.meas_var_bearing * bearing_diff**2)
+                
+                # Combined likelihood for measurement m
+                self.v_factors1[m+1,target,:] = constant_factor * range_likelihood * bearing_likelihood
+        
+        # Calculate v_factors0 for non-existent targets (eq. 65 for r̅_k,s^(m) = 0)
+        v_factors0 = np.zeros((num_measurements + 1, num_targets))
+        v_factors0[0,:] = 1
+        
+        # Combine factors according to existence probability (eq. 64)
+        self.existence = np.tile(alphas_existence.T, (num_measurements + 1, 1))
+        self.beta_k = (existence * np.mean(v_factors1, axis=2) + 
+                        (1 - existence) * v_factors0)
+        
 
-    def perform_data_association_bp(self, beta_k, xi_k, check_convergence, threshold, num_iterations):
+    def perform_data_association_bp(self, beta_k):
         """
         Implements the scalable Sum-Product Algorithm (SPA) based Data Association (DA) algorithm.
         
@@ -278,7 +393,7 @@ class BP_Particle_Filter:
         v_k_current = np.ones((num_measurements, num_objects))  # v_k^[l](m→i)
         
         # Main iteration loop for message passing
-        for l in range(num_iterations):
+        for l in range(self.num_iterations):
             # Store previous messages for convergence check
             v_k_previous = v_k_current.copy()
             
@@ -302,11 +417,9 @@ class BP_Particle_Filter:
             v_k_current = 1.0 / (xi_sum[:, np.newaxis] - phi_k_current)
             
             # Check convergence every check_convergence iterations
-            if (l + 1) % check_convergence == 0:
-                # Compute maximum absolute difference in log domain
-                distance = np.max(np.abs(np.log(v_k_current/v_k_previous)))
-                if distance < threshold:
-                    break
+            distance = np.max(np.abs(np.log(v_k_current/v_k_previous)))
+            if distance < self.threshold:
+                break
         
         phi_k = v_k_current
         return phi_k, v_k
