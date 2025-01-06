@@ -8,10 +8,3 @@ It seems that the original implementation is by Jason Williams in his paper http
 The difficulty with implementing this particular set of code comes from the loopy part. The notations are extremely confusing. 
 
 Matching the paper with this implementation might be the best way to understand things.
-
-<<<<<<< HEAD
-The matlab code is from the author and the python code is my reimplementation.
-=======
-Please note that this particular implementation has very confusing loopy part, essentially, it is impossible for people to implement things on their own based on their papers. 
-The reason for that is they omitted certain terms. 
->>>>>>> adfd26c (update)
