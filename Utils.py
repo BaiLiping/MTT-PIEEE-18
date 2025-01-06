@@ -4,13 +4,32 @@ from dataclasses import dataclass
 from typing import List, Tuple
 import numpy.typing as npt
 
+@dataclass
+class Parameters:
+    surveillance_region: np.ndarray
+    prior_velocity_covariance: np.ndarray
+    driving_noise_variance: float
+    length_steps: np.ndarray
+    survival_probability: float
+    num_sensors: int
+    measurement_variance_range: float
+    measurement_variance_bearing: float
+    detection_probability: float
+    measurement_range: float
+    mean_clutter: float
+    clutter_distribution: float
+    detection_threshold: float
+    threshold_pruning: float
+    minimum_track_length: int
+    num_particles: int
+    target_start_states: np.ndarray
+    target_appearance_from_to: np.ndarray
+    sensor_positions: np.ndarray
+
 
 def get_sensor_positions(num_sensors: int, radius: float) -> np.ndarray:
     """Generate sensor positions in a circle."""
-    num_sensors = round(num_sensors)
-    if num_sensors < 2:
-        return np.array([[0], [radius]])
-    
+    num_sensors = 2
     sensor_positions = np.zeros((2, num_sensors))
     sensor_positions[:, 0] = [0, radius]
     step_size = 2 * np.pi / num_sensors
@@ -33,19 +52,6 @@ def get_start_states(num_targets: int, radius: float, velocity: float) -> np.nda
     
     return states
 
-def get_transition_matrices(scan_time: float) -> Tuple[np.ndarray, np.ndarray]:
-    """Get state transition and noise matrices."""
-    A = np.eye(4)
-    A[0, 2] = scan_time
-    A[1, 3] = scan_time
-    
-    W = np.zeros((4, 2))
-    W[0, 0] = 0.5 * scan_time**2
-    W[1, 1] = 0.5 * scan_time**2
-    W[2, 0] = scan_time
-    W[3, 1] = scan_time
-    
-    return A, W
 
 def generate_true_tracks(parameters: Parameters, num_steps: int) -> np.ndarray:
     """Generate true target tracks."""
@@ -56,7 +62,14 @@ def generate_true_tracks(parameters: Parameters, num_steps: int) -> np.ndarray:
         current_state = parameters.target_start_states[:, target]
         
         for step in range(1, num_steps):
-            A, W = get_transition_matrices(parameters.length_steps[step])
+            A = np.array([[1, 0, parameters.length_steps[step], 0],
+                          [0, 1, 0, parameters.length_steps[step]],
+                          [0, 0, 1, 0],
+                          [0, 0, 0, 1]])
+            W = np.array([0.5 * parameters.length_steps[step]**2, 0],  
+                            [0, 0.5 * parameters.length_steps[step]**2],
+                            [parameters.length_steps[step], 0],
+                            [0, parameters.length_steps[step]])
             current_state = A @ current_state + W @ np.sqrt(parameters.driving_noise_variance) * np.random.randn(2)
             
             if (parameters.target_appearance_from_to[0, target] <= step and 
