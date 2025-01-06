@@ -2,14 +2,10 @@ import numpy as np
 from scipy.linalg import sqrtm
 from typing import Dict, Tuple, Optional
 
-class BPFilter:
+class BP_Particle_Filter:
     """
     Implements the vector-type system model for MTT with unknown, time-varying number of targets
     as described in Section VIII of Meyer et al.
-    
-    The model distinguishes between:
-    - Legacy PTs: targets detected previously (either at k' < k or at current k but previous sensor s' < s)
-    - New PTs: targets newly detected at current time k and sensor s
     """
     
     def __init__(self, parameters: Dict):
@@ -27,7 +23,40 @@ class BPFilter:
         self.mu_c = parameters['mu_c']
         self.p_d = parameters['p_d']
         self.p_s = parameters['p_s']
+        self.dt = parameters['dt']
+        self.F = np.array([[1, 0, self.dt, 0],
+                           [0, 1, 0, self.dt],
+                           [0, 0, 1, 0],
+                           [0, 0, 0, 1]])   # State transition matrix
+        self.W = np.array([[0.5*self.dt**2, 0], 
+                            [0, 0.5*self.dt**2], 
+                            [self.dt, 0], 
+                            [0, self.dt]])  # Process noise matrix
+        self.numParticles = parameters['numParticles']
+        self.steps = parameters['steps']
+        self.posterior_belief = np.zeros((4, self.numParticles, 0))
+        self.existence_prob = np.zeros((0, 1))
+        self.estimated_cardinality = np.zeros(parameters['steps'])
+        self.estimated_states = np.zeros((4, parameters['steps']))
+        # Initialize Poisson point process
+        self.unknown_number = parameters['unknownNumber']
+        self.unknown_particles = np.zeros((2, parameters['numParticles']))
+        # Loop through x and y coordinates (i=0 for x, i=1 for y)
+        for i in range(2):
+            # Generate uniform random distribution of particles within surveillance region:
+            # 1. Calculate region width: surveillanceRegion[1,i] - surveillanceRegion[0,i]
+            # 2. Generate random values [0,1]: np.random.rand(numParticles)
+            # 3. Scale random values to region width by multiplication
+            # 4. Shift by region minimum (surveillanceRegion[0,i]) to get final positions
+            self.unknown_particles[i,:] = (parameters['surveillanceRegion'][1,i] - 
+                                 parameters['surveillanceRegion'][0,i]) * \
+                                 np.random.rand(parameters['numParticles']) + \
+                                 parameters['surveillanceRegion'][0,i]
         self.j_k = 0  # Total number of PTs at time k (initialized to 0 per Vu7)
+
+    def _predict_state(self) -> np.ndarray:
+
+ 
         
     def state_transition(self, y_k_prev: np.ndarray, r_k_prev: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
